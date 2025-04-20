@@ -1,0 +1,8 @@
+[main]
+    ignored-modules = pygame
+
+[format]
+    max-line-length = 120
+
+["messages control"]
+    disable = missing-module-docstring
