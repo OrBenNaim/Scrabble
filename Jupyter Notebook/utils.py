@@ -19,3 +19,16 @@ def heatmap_correlation(df, title: str):
     sns.heatmap(numeric_cols.corr(), annot=True, cmap="coolwarm")
     plt.title(title)
     plt.show()
+
+
+def exclude_bots_from_df(df):
+    # Define the nicknames to exclude
+    exclude_nicknames = ['BetterBot', 'STEEBot', 'HastyBot']
+
+    # Create a boolean mask
+    mask = df['nickname'].isin(exclude_nicknames)
+
+    # Use ~mask to get only the rows NOT in the list
+    train_df_without_bots = df[~mask]
+
+    return train_df_without_bots
