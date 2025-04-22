@@ -1,9 +1,14 @@
-DATA_FOLDER_PATH = "../DATA"
+import os
 
-GAMES_FILE_PATH = DATA_FOLDER_PATH + "/games.csv"
+# Absolute path to the root of the project (Scrabble/)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-TURNS_FILE_PATH = DATA_FOLDER_PATH + "/turns.csv"
+# DATA folder inside the root
+DATA_DIR = os.path.join(PROJECT_ROOT, 'DATA')
 
-TRAIN_FILE_PATH = DATA_FOLDER_PATH + "/train.csv"
+# Full paths to your CSV files
+GAMES_FILE_PATH = os.path.join(DATA_DIR, 'games.csv')
+TURNS_FILE_PATH = os.path.join(DATA_DIR, 'turns.csv')
+TRAIN_FILE_PATH = os.path.join(DATA_DIR, 'train.csv')
 
-TEST_FILE_PATH = DATA_FOLDER_PATH + "/test.csv"
+BOTS_NICKNAMES = ['BetterBot', 'STEEBot', 'HastyBot']
