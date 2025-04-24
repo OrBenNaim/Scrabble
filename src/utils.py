@@ -233,7 +233,6 @@ def create_training_examples() -> pd.DataFrame:
     # convert 'bot_rating' type from numpy.float64 to numpy.int64
     features['bot_rating'] = features['bot_rating'].fillna(0).astype('int64')
 
-
     # Step 4: Add registered user's rating from train_df_without_bots into features
     training_examples_df = pd.merge(features, train_df_without_bots[['game_id', 'nickname', 'rating']],
                                     on=['game_id', 'nickname'])
