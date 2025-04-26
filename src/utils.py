@@ -210,22 +210,19 @@ def create_training_examples():
 
     # Filter out all game_ids that belong to test.csv -> Keep only the rows with game_ids from train_df
     turns_df = turns_df[turns_df['game_id'].isin(train_df_without_bots['game_id'])]
-
-    # Remove bots from turns_df
-    turns_df_without_bots = exclude_bots_from_df(turns_df)
+    turns_df_without_bots = exclude_bots_from_df(turns_df)  # Remove bots from turns_df
 
     # === Step 2: Creates new features for features_df ===
     features_df = create_new_features(turns_df_without_bots=turns_df_without_bots)
 
     # === Step 3: Add bot and real user rating per game ===
-    bot_ratings = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
-        .set_index(['game_id', 'nickname'])['rating']   # Create lookup series for (game_id, nickname) -> rating
+    bot_ratings_by_game = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['rating'].first()  # Take the first bot rating per game
 
     users_rating = train_df_without_bots.set_index(['game_id', 'nickname'])['rating']
 
     # Map to features_df
-    features_df['bot_rating'] = (features_df.set_index(['game_id', 'nickname'])
-                                 .index.map(bot_ratings).fillna(0))
+    features_df['bot_rating'] = features_df['game_id'].map(bot_ratings_by_game).fillna(0).astype('int64')
 
     features_df['user_rating'] = (features_df.set_index(['game_id', 'nickname'])
                                    .index.map(users_rating).fillna(0))
