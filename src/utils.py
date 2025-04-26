@@ -146,11 +146,6 @@ def create_new_features(df: pd.DataFrame) -> None:
     --------
     pandas.DataFrame
         The original dataframe with added feature columns
-
-    Notes:
-    ------
-    - Assumes HARD_LETTERS are defined globally (typically J, K, Q, X, Z)
-    - Requires the calculate_base_word_points function to be defined
     """
 
     # Helper column: word length
