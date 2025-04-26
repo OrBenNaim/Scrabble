@@ -122,7 +122,7 @@ def calculate_base_word_points(move: str) -> int:
     return base_points
 
 
-def create_new_features(df: pd.DataFrame) -> None:
+def create_new_features(turns_df_without_bots: pd.DataFrame) -> pd.DataFrame:
     """
     Enhances the given Scrabble turns dataframe with additional features for analysis.
 
@@ -138,7 +138,7 @@ def create_new_features(df: pd.DataFrame) -> None:
 
     Parameters:
     -----------
-    df : pandas.DataFrame
+    turns_df_without_bots : pandas.DataFrame
         Dataframe of Scrabble game turns with at minimum these columns:
         'move', 'points', 'turn_type'
 
@@ -147,34 +147,54 @@ def create_new_features(df: pd.DataFrame) -> None:
     pandas.DataFrame
         The original dataframe with added feature columns
     """
+    # Precompute all necessary masks and helper columns
+    moves = turns_df_without_bots['move'].fillna('')  # Fill NaN with empty string
+    turn_types = turns_df_without_bots['turn_type'].str.lower()
+    points = turns_df_without_bots['points']
 
-    # Helper column: word length
-    df.loc[:, 'word_length'] = df['move'].apply(
-        lambda x: len(x) if isinstance(x, str) else 0)
+    # Masks and computed columns
+    word_lengths = moves.str.len()
+    is_bingo = word_lengths >= 7
+    has_hard_letter = moves.str.upper().apply(lambda word: any(letter in word for letter in HARD_LETTERS))
+    is_pass = turn_types.eq('pass')
+    is_exchange = turn_types.eq('exchange')
+    is_negative = points < 0
 
-    # Bingo: word length >= 7
-    df.loc[:, 'is_bingo'] = df['word_length'] >= 7
+    # Base points calculation
+    base_word_points = moves.apply(calculate_base_word_points)
+    avg_extra_points_per_game = (points - base_word_points).groupby(turns_df_without_bots['game_id']).mean()
 
-    # Check if move uses any hard letters
-    df.loc[:, 'uses_hard_letters'] = df['move'].apply(
-        lambda x: any(letter in str(x).upper() for letter in HARD_LETTERS) if isinstance(x, str) else False
+    # Build features_df efficiently
+    features_df = (
+        turns_df_without_bots
+        .assign(
+            word_length=word_lengths,
+            is_bingo=is_bingo,
+            has_hard_letter=has_hard_letter,
+            is_pass=is_pass,
+            is_exchange=is_exchange,
+            is_negative=is_negative
+        )
+        .groupby(['game_id', 'nickname'])
+        .agg(
+            avg_word_length=('word_length', 'mean'),
+            bingo_count=('is_bingo', 'sum'),
+            hard_letter_plays=('has_hard_letter', 'sum'),
+            negative_turns_count=('is_negative', 'sum'),
+            pass_count=('is_pass', 'sum'),
+            exchange_count=('is_exchange', 'sum'),
+            score=('points', 'sum')
+        )
+        .reset_index()
     )
 
-    # Negative points
-    df.loc[:, 'is_negative_turn'] = df['points'] < 0
+    # Add avg_extra_points_per_turn
+    features_df['avg_extra_points_per_turn'] = features_df['game_id'].map(avg_extra_points_per_game).fillna(0)
 
-    # Pass detection
-    df.loc[:, 'is_pass'] = df['turn_type'].str.lower() == 'pass'
+    return features_df
 
-    # Exchange detection
-    df.loc[:, 'is_exchange'] = df['turn_type'].str.lower() == 'exchange'
 
-    # Adds a new 'extra_points' column to the DataFrame representing how many
-    # points above base tile value a player earned on a turn — from bonuses, multipliers, or word connections.
-    df.loc[:, 'base_word_points'] = df['move'].apply(calculate_base_word_points)
-    df.loc[:, 'extra_points'] = df['points'] - df['base_word_points']
-
-def create_training_examples() -> pd.DataFrame:
+def create_training_examples():
     """
     Creates dataset to predict user ratings based on game behavior.
     Returns:
@@ -185,54 +205,32 @@ def create_training_examples() -> pd.DataFrame:
     turns_df = pd.read_csv(TURNS_FILE_PATH)
     train_df = pd.read_csv(TRAIN_FILE_PATH)
 
-    # === Step 1: Remove bots ===
-    train_df_without_bots = exclude_bots_from_df(turns_df)
+    # === Step 1: Set up new dfs from turns_df & train_df ===
+    train_df_without_bots = exclude_bots_from_df(train_df)  # Remove bots from train_df
 
-    # Keep only rows in turns_df where 'game_id' exists in train_df_without_bots
-    # (i.e., filter turns_df by matching game_ids)
+    # Filter out all game_ids that belong to test.csv -> Keep only the rows with game_ids from train_df
     turns_df = turns_df[turns_df['game_id'].isin(train_df_without_bots['game_id'])]
 
-    # Remove bots
+    # Remove bots from turns_df
     turns_df_without_bots = exclude_bots_from_df(turns_df)
 
-    # === Step 2: Creates new features for turns_df_without_bots ===
-    create_new_features(df=turns_df_without_bots)
+    # === Step 2: Creates new features for features_df ===
+    features_df = create_new_features(turns_df_without_bots=turns_df_without_bots)
 
-    # === Step 3: # Aggregated features per player per game ===
-    features = turns_df_without_bots.groupby(['game_id', 'nickname']).agg(
-        avg_points_per_turn=('points', 'mean'),
-        avg_extra_points_per_turn=('extra_points', 'mean'),
-        avg_word_length=('word_length', 'mean'),
-        max_points_in_turn=('points', 'max'),
-        bingo_count=('is_bingo', 'sum'),
-        hard_letter_plays=('uses_hard_letters', 'sum'),
-        pass_count=('is_pass', 'sum'),
-        exchange_count=('is_exchange', 'sum'),
-        negative_turns_count=('is_negative_turn', 'sum'),
-        score=('points', 'sum')
-    ).reset_index()
+    # === Step 3: Add bot and real user rating per game ===
+    bot_ratings = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .set_index(['game_id', 'nickname'])['rating']   # Create lookup series for (game_id, nickname) -> rating
 
-    # Keep only rows in features where 'game_id' exists in train_df_without_bots
-    # (i.e., filter features by matching game_ids)
-    #features = features[features['game_id'].isin(train_df_without_bots['game_id'])]
+    users_rating = train_df_without_bots.set_index(['game_id', 'nickname'])['rating']
 
-    # Filter only bot rows from train_df
-    bots_df = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)]
+    # Map to features_df
+    features_df['bot_rating'] = (features_df.set_index(['game_id', 'nickname'])
+                                 .index.map(bot_ratings).fillna(0))
 
-    # Keep only relevant columns and rename 'rating' to 'bot_rating'
-    bots_df = bots_df[['game_id', 'rating']].rename(columns={'rating': 'bot_rating'})
+    features_df['user_rating'] = (features_df.set_index(['game_id', 'nickname'])
+                                   .index.map(users_rating).fillna(0))
 
-    # Merge the bot ratings into features
-    features = features.merge(bots_df, on='game_id', how='left')
+    # === Step 4: Drop 'game_id' & 'nickname' columns ===
+    features_df.drop(columns=['game_id', 'nickname'], inplace=True)
 
-    # convert 'bot_rating' type from numpy.float64 to numpy.int64
-    features['bot_rating'] = features['bot_rating'].fillna(0).astype('int64')
-
-    # Step 4: Add registered user's rating from train_df_without_bots into features
-    training_examples_df = pd.merge(features, train_df_without_bots[['game_id', 'nickname', 'rating']],
-                                    on=['game_id', 'nickname'])
-
-    # Step 5: Drop 'game_id' & 'nickname' columns
-    training_examples_df.drop(columns=['game_id', 'nickname'], inplace=True)
-
-    return training_examples_df
+    return features_df
