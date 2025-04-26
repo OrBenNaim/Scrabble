@@ -12,6 +12,7 @@ TURNS_FILE_PATH = os.path.join(DATA_DIR, 'turns.csv')
 TRAIN_FILE_PATH = os.path.join(DATA_DIR, 'train.csv')
 
 BOTS_NICKNAMES = ['BetterBot', 'STEEBot', 'HastyBot']
+BOT_LEVEL_MAPPING = { 'BetterBot': 1, 'STEEBot': 2, 'HastyBot': 3 }
 
 HARD_LETTERS = ['J', 'K', 'Q', 'X', 'Z']    # Define hard Scrabble letters (high-point tiles)
 
