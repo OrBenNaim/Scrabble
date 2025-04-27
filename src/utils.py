@@ -3,7 +3,8 @@ import pandas as pd
 import seaborn as sns
 
 from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES,
-                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING)
+                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, TEST_FILE_PATH,
+                           GAMES_FILE_PATH)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -123,7 +124,7 @@ def calculate_base_word_points(move: str) -> int:
     return base_points
 
 
-def create_new_features(turns_df_without_bots: pd.DataFrame) -> pd.DataFrame:
+def create_new_features_from_turns(turns_df_without_bots: pd.DataFrame) -> pd.DataFrame:
     """
     Enhances the given Scrabble turns dataframe with additional features for analysis.
 
@@ -165,8 +166,7 @@ def create_new_features(turns_df_without_bots: pd.DataFrame) -> pd.DataFrame:
     base_word_points = moves.apply(calculate_base_word_points)
     avg_extra_points_per_game = (points - base_word_points).groupby(turns_df_without_bots['game_id']).mean()
 
-    # Build features_df efficiently
-    features_df = (
+    dataset_df = (
         turns_df_without_bots
         .assign(
             word_length=word_lengths,
@@ -184,18 +184,70 @@ def create_new_features(turns_df_without_bots: pd.DataFrame) -> pd.DataFrame:
             negative_turns_count=('is_negative', 'sum'),
             pass_count=('is_pass', 'sum'),
             exchange_count=('is_exchange', 'sum'),
-            score=('points', 'sum')
+            user_score=('points', 'sum')
         )
         .reset_index()
     )
 
     # Add avg_extra_points_per_turn
-    features_df['avg_extra_points_per_turn'] = features_df['game_id'].map(avg_extra_points_per_game).fillna(0)
+    dataset_df['avg_extra_points_per_turn'] = dataset_df['game_id'].map(avg_extra_points_per_game).fillna(0)
 
-    return features_df
+    return dataset_df
 
 
-def create_features_dataset():
+def create_new_features_from_train_test(dataset_df: pd.DataFrame, train_df: pd.DataFrame,
+                                        test_df: pd.DataFrame):
+    # === Create bot_score of all played bots (from train.csv + test.csv) ===
+
+    # Get bots_score_by_game_in_train
+    bots_score_by_game_in_train = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['score'].first()
+
+    # Get bots_score_by_game_in_test
+    bots_score_by_game_in_test = test_df[test_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['score'].first()
+
+    merged_bots_score = pd.concat([bots_score_by_game_in_train, bots_score_by_game_in_test])
+
+    # Map merged_bots_score to features_df
+    dataset_df['bot_score'] = dataset_df['game_id'].map(merged_bots_score).fillna(0).astype('int64')
+    #===================================================================================
+
+    # === Create bot_rating of all played bots (from train.csv + test.csv) ===
+
+    # Get bots_rating_by_game_train
+    bots_rating_by_game_train = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['rating'].first()  # Take the first bot rating per game (For cases of 2 bots in one game)
+
+    # Get bots_rating_by_game_test
+    bots_rating_by_game_test = test_df[test_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['rating'].first()  # Take the first bot rating per game (For cases of 2 bots in one game)
+
+    merged_bots_rating = pd.concat([bots_rating_by_game_train, bots_rating_by_game_test])
+
+    # Map merged_bots_rating to dataset_df
+    dataset_df['bot_rating'] = dataset_df['game_id'].map(merged_bots_rating).fillna(0).astype('int64')
+    #=========================================================================
+
+    # === Create bot_level of all played bots (from train.csv + test.csv) ===
+
+    # Get the bot_nickname_by_game_train:
+    bot_nickname_by_game_train = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['nickname'].first()
+
+    # Get the bot_nickname_by_game_test:
+    bot_nickname_by_game_test = test_df[test_df['nickname'].isin(BOTS_NICKNAMES)] \
+        .groupby('game_id')['nickname'].first()
+
+    merged_bots_level = pd.concat([bot_nickname_by_game_train, bot_nickname_by_game_test])
+
+    # Map bot_level into dataset_df
+    dataset_df['bot_level'] = (dataset_df['game_id'].map(merged_bots_level).map(BOT_LEVEL_MAPPING)
+                                .fillna(0).astype('int64'))
+    #=========================================================================
+
+
+def create_dataset():
     """
     Creates a dataset to predict user ratings based on gameplay behavior.
 
@@ -211,51 +263,42 @@ def create_features_dataset():
         - Drops identifiers ('game_id', 'nickname') to keep only features and targets.
 
     Returns:
-        pd.DataFrame: A DataFrame where each row represents a player in a game,
+        pd.DataFrame: A DataFrame where each row represents a game,
                       with features and the corresponding target rating.
     """
 
     # === Step 0: Load Data ===
+    game_df = pd.read_csv(GAMES_FILE_PATH)
     turns_df = pd.read_csv(TURNS_FILE_PATH)
     train_df = pd.read_csv(TRAIN_FILE_PATH)
-    #=======================================
+    test_df = pd.read_csv(TEST_FILE_PATH)
+    #========================================================
 
     # === Step 1: Set up new dfs from turns_df & train_df ===
     train_df_without_bots = exclude_bots_from_df(train_df)  # Remove bots from train_df
 
     # Filter out all game_ids that belong to test.csv -> Keep only the rows with game_ids from train_df
-    turns_df = turns_df[turns_df['game_id'].isin(train_df_without_bots['game_id'])]
+    #turns_df = turns_df[turns_df['game_id'].isin(train_df_without_bots['game_id'])]
     turns_df_without_bots = exclude_bots_from_df(turns_df)  # Remove bots from turns_df
     #=====================================================================================================
 
-    # === Step 2: Creates new features for features_df ===
-    features_df = create_new_features(turns_df_without_bots=turns_df_without_bots)
-    #=============================================================================
+    # === Step 2: Creates new features for dataset_df ===
+    dataset_df = create_new_features_from_turns(turns_df_without_bots=turns_df_without_bots)
+    dataset_df['lexicon'] = dataset_df['game_id'].map(game_df.set_index('game_id')['lexicon'])
+    create_new_features_from_train_test(dataset_df=dataset_df, train_df=train_df, test_df=test_df)
+    #=====================================================================================================
 
-    # === Step 3: Add bot and real user rating per game ===
-    bots_rating_by_game = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
-        .groupby('game_id')['rating'].first()  # Take the first bot rating per game (For cases of 2 bots in one game)
-
-    # Map bot_ratings_by_game to features_df
-    features_df['bot_rating'] = features_df['game_id'].map(bots_rating_by_game).fillna(0).astype('int64')
-
-    # Get the bot nickname per game:
-    bot_nickname_by_game = train_df[train_df['nickname'].isin(BOTS_NICKNAMES)] \
-        .groupby('game_id')['nickname'].first()
-
-    # Map bot level into features_df
-    features_df['bot_level'] = features_df['game_id'].map(bot_nickname_by_game).map(BOT_LEVEL_MAPPING).fillna(0).astype(
-        'int64')
+    # === Step 3: Add real user rating per game ===
 
     # Get the user rating per (game_id, nickname) from train_df_without_bots
     users_rating = train_df_without_bots.set_index(['game_id', 'nickname'])['rating']
 
     # Map user ratings into features_df
-    features_df['user_rating'] = (features_df.set_index(['game_id', 'nickname'])
-                                   .index.map(users_rating).fillna(0))
+    dataset_df['user_rating'] = (dataset_df.set_index(['game_id', 'nickname']).index.map(users_rating)
+                                  .fillna(0).astype('int64'))  # 0 indicates a row that will be predicated later
     #============================================================================================
 
     # === Step 4: Drop 'game_id' & 'nickname' columns ===
-    features_df.drop(columns=['game_id', 'nickname'], inplace=True)
+    dataset_df.drop(columns=['game_id', 'nickname'], inplace=True)
 
-    return features_df
+    return dataset_df
