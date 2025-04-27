@@ -10,6 +10,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, 'DATA')
 GAMES_FILE_PATH = os.path.join(DATA_DIR, 'games.csv')
 TURNS_FILE_PATH = os.path.join(DATA_DIR, 'turns.csv')
 TRAIN_FILE_PATH = os.path.join(DATA_DIR, 'train.csv')
+TEST_FILE_PATH = os.path.join(DATA_DIR, 'test.csv')
 
 BOTS_NICKNAMES = ['BetterBot', 'STEEBot', 'HastyBot']
 BOT_LEVEL_MAPPING = { 'BetterBot': 1, 'STEEBot': 2, 'HastyBot': 3 }
