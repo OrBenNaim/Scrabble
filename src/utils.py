@@ -2,6 +2,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestRegressor
+
 from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES,
                            HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, TEST_FILE_PATH,
                            GAMES_FILE_PATH)
@@ -331,3 +337,34 @@ def create_dataset():
     dataset_df.drop(columns=['game_id', 'nickname'], inplace=True)
 
     return dataset_df
+
+
+def model_predictions(X: pd.DataFrame, y: pd.Series):
+
+    # X = features, y = labels
+    X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # 1. Define preprocessing
+    numeric_features = ['height', 'weight']
+    numeric_transformer = StandardScaler()
+
+    categorical_features = ['gender']
+    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features)
+        ])
+
+    # 2. Create a pipeline
+    pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),  # first do preprocessing
+        ('model', RandomForestRegressor())  # then fit the model
+    ])
+
+    # 3. Fit pipeline
+    pipeline.fit(X_train, y_train)
+
+    # 4. Predict
+    predictions = pipeline.predict(X_valid)
