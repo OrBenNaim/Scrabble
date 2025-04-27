@@ -197,6 +197,37 @@ def create_new_features_from_turns(turns_df_without_bots: pd.DataFrame) -> pd.Da
 
 def create_new_features_from_train_test(dataset_df: pd.DataFrame, train_df: pd.DataFrame,
                                         test_df: pd.DataFrame):
+    """
+    Enhances the provided dataset with bot-related features derived from training and test datasets.
+
+    This function adds three bot-related columns to the dataset_df:
+        - bot_score: The score achieved by bots in each game
+        - bot_rating: The rating of bots in each game
+        - bot_level: The level of bots (1, 2, or 3) based on their type (mapped via BOT_LEVEL_MAPPING)
+
+    For games with multiple bots, the first bot's information is used. Missing values are filled with 0.
+
+    Parameters:
+    -----------
+        dataset_df : pandas.DataFrame
+            The dataset to enhance with bot features. Must contain a 'game_id' column.
+        train_df : pandas.DataFrame
+            Training dataset containing game information. Must have 'game_id', 'nickname',
+            'score', and 'rating' columns.
+        test_df : pandas.DataFrame
+            Test dataset containing game information. Must have the same structure as train_df.
+
+    Returns:
+    --------
+        pandas.DataFrame
+            The original dataset_df with added bot feature columns.
+
+    Notes:
+    ------
+        - BOTS_NICKNAMES is expected to be a list of bot nicknames used to identify bots in the data
+        - BOT_LEVEL_MAPPING is expected to be a dictionary mapping bot types to their level (1, 2, or 3)
+    """
+
     # === Create bot_score of all played bots (from train.csv + test.csv) ===
 
     # Get bots_score_by_game_in_train
@@ -249,7 +280,7 @@ def create_new_features_from_train_test(dataset_df: pd.DataFrame, train_df: pd.D
 
 def create_dataset():
     """
-    Creates a dataset to predict user ratings based on gameplay behavior.
+    Creates a dataset with all features and 'y' target (dataset contains also testing data)¶
 
     Steps:
         - Loads game turns data and training data.
@@ -277,8 +308,6 @@ def create_dataset():
     # === Step 1: Set up new dfs from turns_df & train_df ===
     train_df_without_bots = exclude_bots_from_df(train_df)  # Remove bots from train_df
 
-    # Filter out all game_ids that belong to test.csv -> Keep only the rows with game_ids from train_df
-    #turns_df = turns_df[turns_df['game_id'].isin(train_df_without_bots['game_id'])]
     turns_df_without_bots = exclude_bots_from_df(turns_df)  # Remove bots from turns_df
     #=====================================================================================================
 
