@@ -2,15 +2,20 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import cross_val_score, KFold
+
+from skopt import BayesSearchCV
+
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
 
 from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES,
                            HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, TEST_FILE_PATH,
-                           GAMES_FILE_PATH)
+                           GAMES_FILE_PATH, CV_N_SPLITS)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -339,32 +344,160 @@ def create_dataset():
     return dataset_df
 
 
-def model_predictions(X: pd.DataFrame, y: pd.Series):
+def evaluate_multiple_models(X, y):
+    """
+    Evaluate multiple machine learning models using cross-validation and return performance metrics
 
-    # X = features, y = labels
-    X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2, random_state=42)
+    Parameters:
+    -----------
+    X : pandas.DataFrame
+        Training + Validation features
+    y : pandas.Series
+        Training + Validation target values
+    Returns:
+    --------
+    results : pandas.DataFrame containing model names and their performance metrics
+    """
+    # Models to evaluate
+    models = {
+        'Random Forest': RandomForestRegressor(random_state=42),
+        'XGBoost': XGBRegressor(random_state=42),
+        'LightGBM': LGBMRegressor(random_state=42),
+    }
 
-    # 1. Define preprocessing
-    numeric_features = ['height', 'weight']
-    numeric_transformer = StandardScaler()
+    # Numerical features to scale
+    numerical_features = X.select_dtypes(include=['number']).columns.tolist()
 
-    categorical_features = ['gender']
-    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
+    # Categorical features to encode
+    categorical_features = X.select_dtypes(exclude=['number']).columns.tolist()
 
+    # Create preprocessor
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', numeric_transformer, numeric_features),
-            ('cat', categorical_transformer, categorical_features)
+            ('num', StandardScaler(), numerical_features),  # Scaling features
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+        ], remainder='passthrough')
+
+    # Results storage
+    results = []
+
+    # Define cross-validation strategy
+    k_fold = KFold(n_splits=CV_N_SPLITS, shuffle=True, random_state=42)
+
+    # Evaluate each model
+    for name, model in models.items():
+        print(f"Evaluating {name}...")
+
+        # Create a pipeline
+        pipeline = Pipeline([
+            ('preprocessor', preprocessor), # first do preprocessing
+            ('model', model)    # then fit the model
         ])
 
-    # 2. Create a pipeline
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),  # first do preprocessing
-        ('model', RandomForestRegressor())  # then fit the model
+        # Perform cross-validation
+        cv_scores = cross_val_score(
+            pipeline, X, y, cv=k_fold, scoring='neg_root_mean_squared_error', n_jobs=-1
+        )
+        # Store results
+        results.append({
+            'Model': name,
+
+            # Remember: For regression, it returns NEGATIVE MSE (because higher = better).
+            # To get regular MSE: flipped the sign
+            'Mean_CV_RMSE': -cv_scores.mean(),
+
+            'Std_Mean_CV_RMSE': cv_scores.std(),
+            'Min_CV_RMSE': -cv_scores.min(),
+            'Max_CV_RMSE': -cv_scores.max()
+        })
+
+    # Convert to DataFrame and sort by validation score
+    results_df = pd.DataFrame(results).sort_values('Mean_CV_RMSE', ascending=True)
+    return results_df
+
+
+def tune_best_model(X_train, y_train, model_name):
+    """
+    Tune hyperparameters for the specified model using Bayesian Optimization.
+
+    Parameters:
+    -----------
+    X_train : pandas.DataFrame
+        Training features
+    y_train : pandas.Series
+        Training target values
+    model_name : str
+        Name of the model to tune ('Random Forest', 'XGBoost', 'LightGBM')
+
+    Returns:
+    --------
+    best_model : sklearn.pipeline.Pipeline
+        Tuned model pipeline
+    best_params : dict
+        Best hyperparameters
+    """
+    # Numerical features
+    numerical_features = X_train.select_dtypes(include=['number']).columns.tolist()
+
+    # Categorical features to encode
+    categorical_features = X_train.select_dtypes(exclude=['number']).columns.tolist()
+
+    # Create preprocessor
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+        ], remainder='passthrough')
+
+    # Define model and search space based on model_name
+    if model_name == 'Random Forest':
+        model = RandomForestRegressor(random_state=42)
+        param_space = {
+            'model__n_estimators': (100, 500),
+            'model__max_depth': (5, 50),
+            'model__min_samples_split': (2, 20),
+        }
+    elif model_name == 'XGBoost':
+        model = XGBRegressor(random_state=42)
+        param_space = {
+            'model__n_estimators': (100, 500),
+            'model__max_depth': (3, 12),
+            'model__learning_rate': (0.01, 0.3, 'log-uniform'),
+            'model__subsample': (0.5, 1.0),
+        }
+    elif model_name == 'LightGBM':
+        model = LGBMRegressor(random_state=42)
+        param_space = {
+            'model__n_estimators': (100, 500),
+            'model__max_depth': (3, 12),
+            'model__learning_rate': (0.01, 0.3, 'log-uniform'),
+            'model__num_leaves': (20, 150),
+        }
+    else:
+        raise ValueError(f"Model {model_name} not supported for tuning")
+
+    # Create a pipeline
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('model', model)
     ])
 
-    # 3. Fit pipeline
-    pipeline.fit(X_train, y_train)
+    # Bayesian search
+    bayes_search = BayesSearchCV(
+        pipeline,
+        search_spaces=param_space,
+        n_iter=30,
+        cv=CV_N_SPLITS,
+        scoring='neg_root_mean_squared_error',
+        n_jobs=-1,
+        verbose=2,
+        random_state=42
+    )
 
-    # 4. Predict
-    predictions = pipeline.predict(X_valid)
+    # Fit search
+    bayes_search.fit(X_train, y_train)
+
+    print(f"Best parameters: {bayes_search.best_params_}")
+    print(f"Best CV score (RMSE): {-bayes_search.best_score_:.4f}")
+
+    return bayes_search.best_estimator_, bayes_search.best_params_

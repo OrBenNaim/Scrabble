@@ -26,3 +26,5 @@ SCRABBLE_LETTER_VALUES = {
     'U': 1, 'V': 4, 'W': 4, 'X': 8,
     'Y': 4, 'Z': 10
 }
+
+CV_N_SPLITS = 10     # This parameter in KFold cross-validation defines how many parts the dataset will be split into
