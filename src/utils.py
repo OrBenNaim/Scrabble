@@ -7,14 +7,10 @@ from optuna.samplers import TPESampler
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import cross_val_score, KFold
+from sklearn.model_selection import cross_val_score, cross_validate
 
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-
-from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES, HARD_LETTERS, SCRABBLE_LETTER_VALUES,
-                           BOT_LEVEL_MAPPING, TEST_FILE_PATH, GAMES_FILE_PATH, CV_N_SPLITS, N_TRIALS, MODEL_CONFIGS)
+from src.constants import (GAMES_FILE_PATH, TURNS_FILE_PATH, TRAIN_FILE_PATH, TEST_FILE_PATH, BOTS_NICKNAMES,
+                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, CV_N_SPLITS, N_TRIALS, MODEL_CONFIGS)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -343,79 +339,7 @@ def create_dataset():
     return dataset_df
 
 
-def evaluate_multiple_models(X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
-    """
-    Evaluate multiple machine learning models using cross-validation and return performance metrics
-
-    Parameters:
-    -----------
-    X : pandas.DataFrame
-        Training + Validation features
-    y : pandas.Series
-        Training + Validation target values
-    Returns:
-    --------
-    results : pandas.DataFrame containing model names and their performance metrics
-    """
-    # Models to evaluate
-    models = {
-        'Random Forest': RandomForestRegressor(random_state=42),
-        'XGBoost': XGBRegressor(random_state=42),
-        'LightGBM': LGBMRegressor(random_state=42),
-    }
-
-    # Numerical features to scale
-    numerical_features = X.select_dtypes(include=['number']).columns.tolist()
-
-    # Categorical features to encode
-    categorical_features = X.select_dtypes(exclude=['number']).columns.tolist()
-
-    # Create preprocessor
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), numerical_features),  # Scaling features
-            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
-        ], remainder='passthrough')
-
-    # Results storage
-    results = []
-
-    # Define cross-validation strategy
-    k_fold = KFold(n_splits=CV_N_SPLITS, shuffle=True, random_state=42)
-
-    # Evaluate each model
-    for name, model in models.items():
-        print(f"Evaluating {name}...")
-
-        # Create a pipeline
-        pipeline = Pipeline([
-            ('preprocessor', preprocessor), # first do preprocessing
-            ('model', model)    # then fit the model
-        ])
-
-        # Perform cross-validation
-        cv_scores = cross_val_score(
-            pipeline, X, y, cv=k_fold, scoring='neg_root_mean_squared_error', n_jobs=-1
-        )
-        # Store results
-        results.append({
-            'Model': name,
-
-            # Remember: For regression, it returns NEGATIVE MSE (because higher = better).
-            # To get regular MSE: flipped the sign
-            'Mean_CV_RMSE': -cv_scores.mean(),
-
-            'Std_Mean_CV_RMSE': cv_scores.std(),
-            'Min_CV_RMSE': -cv_scores.min(),
-            'Max_CV_RMSE': -cv_scores.max()
-        })
-
-    # Convert to DataFrame and sort by validation score
-    results_df = pd.DataFrame(results).sort_values('Mean_CV_RMSE', ascending=True)
-    return results_df
-
-
-def tune_all_models(X_train_val, y_train_val):
+def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
     """
     Tune hyperparameters for Random Forest, XGBoost, and LightGBM using Bayesian Optimization.
 
@@ -457,7 +381,7 @@ def tune_all_models(X_train_val, y_train_val):
                 ('preprocessor', preprocessor),
                 ('model', current_model)
             ])
-            score = cross_val_score(pipeline, X_train_val, y_train_val, cv=CV_N_SPLITS,
+            score = cross_val_score(estimator=pipeline, X=X_train_val, y=y_train_val, cv=CV_N_SPLITS,
                                     scoring='neg_root_mean_squared_error', n_jobs=-1).mean()
             return -score   # negative RMSE
 
@@ -482,3 +406,76 @@ def tune_all_models(X_train_val, y_train_val):
 
     scores_df = pd.DataFrame(scores).sort_values(by='Mean_CV_RMSE', ascending=True).reset_index(drop=True)
     return scores_df, best_models
+
+
+def find_best_model(X_train_val: pd.DataFrame, y_train_val: pd.Series) -> (Pipeline, float, float):
+    """
+    Tune multiple models, select the one with the best cross-validated performance, and compute train/validation RMSE.
+
+    Parameters:
+    -----------
+    X_train_val : pd.DataFrame
+        Combined training and validation features.
+    y_train_val : pd.Series
+        Combined training and validation target values.
+
+    Returns:
+    --------
+    best_model : sklearn.pipeline.Pipeline
+        The tuned model pipeline with the lowest validation RMSE.
+    avg_train_rmse : float
+        Average RMSE on the training folds during cross-validation.
+    avg_val_rmse : float
+        Average RMSE on the validation folds during cross-validation.
+    """
+    # Tune all models
+    cross_val_scores_df, tuned_models = tune_all_models(X_train_val, y_train_val)
+
+    print(cross_val_scores_df, end='\n')
+    print(tuned_models, end='\n')
+
+    best_model = tuned_models[cross_val_scores_df.iloc[0]['model']]
+
+    avg_train_rmse, avg_val_rmse = calc_train_val_rmse_cv(best_model, X_train_val, y_train_val)
+
+    return best_model, avg_train_rmse, avg_val_rmse
+
+
+def calc_train_val_rmse_cv(pipeline: Pipeline, X_train_val: pd.DataFrame, y_train_val: pd.Series) -> (float, float):
+    """
+    Evaluate a model pipeline using cross-validation and return RMSE for training and validation sets.
+
+    Parameters:
+    -----------
+    pipeline : sklearn.pipeline.Pipeline
+        The model pipeline to evaluate.
+    X_train_val : pd.DataFrame
+        Combined training and validation features.
+    y_train_val : pd.Series
+        Combined training and validation target values.
+
+    Returns:
+    --------
+    avg_train_rmse : float
+        Average RMSE on the training folds.
+    avg_val_rmse : float
+        Average RMSE on the validation folds.
+    """
+
+    results = cross_validate(
+        estimator=pipeline,
+        X=X_train_val,
+        y=y_train_val,
+        cv=CV_N_SPLITS,
+        scoring='neg_root_mean_squared_error',
+        return_train_score=True,
+        n_jobs=-1
+    )
+
+    train_scores = results['train_score']  # negative RMSE on training folds
+    val_scores = results['test_score']  # negative RMSE on validation folds
+
+    avg_train_rmse = -train_scores.mean()  # Convert to RMSE (positive values)
+    avg_val_rmse = -val_scores.mean()
+
+    return avg_train_rmse, avg_val_rmse

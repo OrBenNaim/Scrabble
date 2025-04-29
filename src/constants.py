@@ -42,8 +42,8 @@ RANGE_LEARNING_RATE = (0.01, 0.3)
 RANGE_SUBSAMPLE = (0.5, 1.0)
 RANGE_NUM_LEAVES = (20, 150)
 CV_N_SPLITS = 5     # This parameter in KFold cross-validation defines how many parts the dataset will be split into
-N_TRIALS = 10       # This parameter in study.optimize() defines  number of optimization
-                    # iterations (trials) the tuner will run.
+N_TRIALS = 10       # This parameter in study.optimize() defines the number of optimization iterations (trials)
+                    # the tuner will run.
 
 MODEL_CONFIGS = {
         'Random Forest': lambda trial: RandomForestRegressor(
