@@ -1,5 +1,10 @@
 import os
 
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+
+
 # Absolute path to the root of the project (Scrabble/)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -27,4 +32,41 @@ SCRABBLE_LETTER_VALUES = {
     'Y': 4, 'Z': 10
 }
 
-CV_N_SPLITS = 10     # This parameter in KFold cross-validation defines how many parts the dataset will be split into
+
+# === Hyperparameter Search Space Constants ===
+RANGE_N_ESTIMATORS = (100, 500)
+RANGE_MAX_DEPTH_RF = (5, 50)
+RANGE_MAX_DEPTH_GBM = (3, 12)
+RANGE_MIN_SAMPLES_SPLIT = (2, 20)
+RANGE_LEARNING_RATE = (0.01, 0.3)
+RANGE_SUBSAMPLE = (0.5, 1.0)
+RANGE_NUM_LEAVES = (20, 150)
+CV_N_SPLITS = 5     # This parameter in KFold cross-validation defines how many parts the dataset will be split into
+N_TRIALS = 10       # This parameter in study.optimize() defines  number of optimization
+                    # iterations (trials) the tuner will run.
+
+MODEL_CONFIGS = {
+        'Random Forest': lambda trial: RandomForestRegressor(
+            n_estimators=trial.suggest_int('n_estimators', *RANGE_N_ESTIMATORS),
+            max_depth=trial.suggest_int('max_depth', *RANGE_MAX_DEPTH_RF),
+            min_samples_split=trial.suggest_int('min_samples_split', *RANGE_MIN_SAMPLES_SPLIT),
+            random_state=42,
+            n_jobs=-1
+        ),
+        'XGBoost': lambda trial: XGBRegressor(
+            n_estimators=trial.suggest_int('n_estimators', *RANGE_N_ESTIMATORS),
+            max_depth=trial.suggest_int('max_depth', *RANGE_MAX_DEPTH_GBM),
+            learning_rate=trial.suggest_float('learning_rate', *RANGE_LEARNING_RATE, log=True),
+            subsample=trial.suggest_float('subsample', *RANGE_SUBSAMPLE),
+            random_state=42,
+            n_jobs=-1
+        ),
+        'LightGBM': lambda trial: LGBMRegressor(
+            n_estimators=trial.suggest_int('n_estimators', *RANGE_N_ESTIMATORS),
+            max_depth=trial.suggest_int('max_depth', *RANGE_MAX_DEPTH_GBM),
+            learning_rate=trial.suggest_float('learning_rate', *RANGE_LEARNING_RATE, log=True),
+            num_leaves=trial.suggest_int('num_leaves', *RANGE_NUM_LEAVES),
+            random_state=42,
+            n_jobs=-1
+        )
+    }

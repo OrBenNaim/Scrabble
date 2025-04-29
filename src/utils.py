@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+import optuna
+from optuna.samplers import TPESampler
 
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -8,14 +10,11 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import cross_val_score, KFold
 
-from skopt import BayesSearchCV
-
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
 
-from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES,
-                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, TEST_FILE_PATH,
-                           GAMES_FILE_PATH, CV_N_SPLITS)
+from src.constants import (TURNS_FILE_PATH, TRAIN_FILE_PATH, BOTS_NICKNAMES, HARD_LETTERS, SCRABBLE_LETTER_VALUES,
+                           BOT_LEVEL_MAPPING, TEST_FILE_PATH, GAMES_FILE_PATH, CV_N_SPLITS, N_TRIALS, MODEL_CONFIGS)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -344,7 +343,7 @@ def create_dataset():
     return dataset_df
 
 
-def evaluate_multiple_models(X, y):
+def evaluate_multiple_models(X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
     """
     Evaluate multiple machine learning models using cross-validation and return performance metrics
 
@@ -416,88 +415,70 @@ def evaluate_multiple_models(X, y):
     return results_df
 
 
-def tune_best_model(X_train, y_train, model_name):
+def tune_all_models(X_train_val, y_train_val):
     """
-    Tune hyperparameters for the specified model using Bayesian Optimization.
+    Tune hyperparameters for Random Forest, XGBoost, and LightGBM using Bayesian Optimization.
 
     Parameters:
     -----------
-    X_train : pandas.DataFrame
-        Training features
-    y_train : pandas.Series
-        Training target values
-    model_name : str
-        Name of the model to tune ('Random Forest', 'XGBoost', 'LightGBM')
+    X_train_val : pandas.DataFrame
+        Training features.
+    y_train_val : pandas.Series
+        Training target values.
 
     Returns:
     --------
-    best_model : sklearn.pipeline.Pipeline
-        Tuned model pipeline
-    best_params : dict
-        Best hyperparameters
+    scores_df : pandas.DataFrame
+        DataFrame with columns: ['model', 'neg_rmse'] for each model.
+    best_models : dict
+        Dictionary of model names mapped to their optimized pipelines.
     """
-    # Numerical features
-    numerical_features = X_train.select_dtypes(include=['number']).columns.tolist()
 
-    # Categorical features to encode
-    categorical_features = X_train.select_dtypes(exclude=['number']).columns.tolist()
+    # Extract feature types
+    # Identify feature types
+    numerical_features = X_train_val.select_dtypes(include=['number']).columns.tolist()
+    categorical_features = X_train_val.select_dtypes(exclude=['number']).columns.tolist()
 
-    # Create preprocessor
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), numerical_features),
-            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
-        ], remainder='passthrough')
+    # Create shared preprocessor
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', StandardScaler(), numerical_features),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+    ], remainder='passthrough')
 
-    # Define model and search space based on model_name
-    if model_name == 'Random Forest':
-        model = RandomForestRegressor(random_state=42)
-        param_space = {
-            'model__n_estimators': (100, 500),
-            'model__max_depth': (5, 50),
-            'model__min_samples_split': (2, 20),
-        }
-    elif model_name == 'XGBoost':
-        model = XGBRegressor(random_state=42)
-        param_space = {
-            'model__n_estimators': (100, 500),
-            'model__max_depth': (3, 12),
-            'model__learning_rate': (0.01, 0.3, 'log-uniform'),
-            'model__subsample': (0.5, 1.0),
-        }
-    elif model_name == 'LightGBM':
-        model = LGBMRegressor(random_state=42)
-        param_space = {
-            'model__n_estimators': (100, 500),
-            'model__max_depth': (3, 12),
-            'model__learning_rate': (0.01, 0.3, 'log-uniform'),
-            'model__num_leaves': (20, 150),
-        }
-    else:
-        raise ValueError(f"Model {model_name} not supported for tuning")
+    best_models = {}
+    scores = []
 
-    # Create a pipeline
-    pipeline = Pipeline([
-        ('preprocessor', preprocessor),
-        ('model', model)
-    ])
+    for model_name, model_builder in MODEL_CONFIGS.items():
+        print(f"\nOptimizing: {model_name}")
 
-    # Bayesian search
-    bayes_search = BayesSearchCV(
-        pipeline,
-        search_spaces=param_space,
-        n_iter=30,
-        cv=CV_N_SPLITS,
-        scoring='neg_root_mean_squared_error',
-        n_jobs=-1,
-        verbose=2,
-        random_state=42
-    )
+        def objective(trial):
+            current_model = model_builder(trial)
+            pipeline = Pipeline([
+                ('preprocessor', preprocessor),
+                ('model', current_model)
+            ])
+            score = cross_val_score(pipeline, X_train_val, y_train_val, cv=CV_N_SPLITS,
+                                    scoring='neg_root_mean_squared_error', n_jobs=-1).mean()
+            return -score   # negative RMSE
 
-    # Fit search
-    bayes_search.fit(X_train, y_train)
+        study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=42))
+        study.optimize(objective, n_trials=N_TRIALS)
 
-    print(f"Best parameters: {bayes_search.best_params_}")
-    print(f"Best CV score (RMSE): {-bayes_search.best_score_:.4f}")
+        best_score = study.best_value
+        best_params = study.best_trial.params
 
-    return bayes_search.best_estimator_, bayes_search.best_params_
+        print(f"Best score for {model_name}: {best_score:.4f}")
+        print(f"\nBest params: {best_params}")
+
+        # Build final model with best params
+        model = model_builder(study.best_trial)
+        final_pipeline = Pipeline([
+            ('preprocessor', preprocessor),
+            ('model', model)
+        ])
+
+        best_models[model_name] = final_pipeline
+        scores.append({'model': model_name, 'Mean_CV_RMSE': best_score})
+
+    scores_df = pd.DataFrame(scores).sort_values(by='Mean_CV_RMSE', ascending=True).reset_index(drop=True)
+    return scores_df, best_models
