@@ -18,5 +18,5 @@ if __name__ == "__main__":
     print(f"Train RMSE: {avg_train_rmse:.3f}")
     print(f"Validation RMSE: {avg_val_rmse:.3f}")
 
-    gap = avg_val_rmse - avg_train_rmse
-    print(f"Generalization Gap: {gap:.3f}")
+    gap = ((avg_val_rmse / avg_train_rmse) - 1) * 100
+    print(f"Generalization Gap: {gap:.3f}%")
