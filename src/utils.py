@@ -10,7 +10,8 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.model_selection import cross_val_score, cross_validate
 
 from src.constants import (GAMES_FILE_PATH, TURNS_FILE_PATH, TRAIN_FILE_PATH, TEST_FILE_PATH, BOTS_NICKNAMES,
-                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, CV_N_SPLITS, N_TRIALS, MODEL_CONFIGS)
+                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, CV_N_SPLITS, N_TRIALS,
+                           MODEL_CONFIGS)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -280,7 +281,7 @@ def create_new_features_from_train_test(dataset_df: pd.DataFrame, train_df: pd.D
 
     # Map bot_level into dataset_df
     dataset_df['bot_level'] = (dataset_df['game_id'].map(merged_bots_level).map(BOT_LEVEL_MAPPING)
-                                .fillna(0).astype('int64'))
+                               .fillna(0).astype('int64'))
     #=========================================================================
 
 
@@ -313,7 +314,6 @@ def create_dataset():
 
     # === Step 1: Set up new dfs from turns_df & train_df ===
     train_df_without_bots = exclude_bots_from_df(train_df)  # Remove bots from train_df
-
     turns_df_without_bots = exclude_bots_from_df(turns_df)  # Remove bots from turns_df
     #=====================================================================================================
 
@@ -321,6 +321,32 @@ def create_dataset():
     dataset_df = create_new_features_from_turns(turns_df_without_bots=turns_df_without_bots)
     dataset_df['lexicon'] = dataset_df['game_id'].map(game_df.set_index('game_id')['lexicon'])
     create_new_features_from_train_test(dataset_df=dataset_df, train_df=train_df, test_df=test_df)
+
+    # Adding new features in False Analysis phase
+
+    # Measures how much the user outperformed (or underperformed) the bot — often directly correlated with target rating
+    dataset_df['score_diff'] = dataset_df['user_score'] - dataset_df['bot_score']
+
+    # Represents high-risk, high-reward play styles — long words with extra points
+    dataset_df['aggression_score'] = dataset_df['avg_extra_points_per_turn'] * dataset_df['avg_word_length']
+
+    # Normalizes bingo's by overall score — helpful for measuring how dependent a player is on bingo's
+    dataset_df['bingo_density'] = dataset_df['bingo_count'] / (dataset_df['user_score'] + 1e-5)
+
+    # Normalizes score by word complexity; useful to reward concise but effective play
+    dataset_df['efficiency_score'] = dataset_df['user_score'] / (dataset_df['avg_word_length'] + 1e-5)
+
+    # Detects when the bot played unusually well or poorly compared to its expected rating
+    dataset_df['bot_rating_diff'] = dataset_df['bot_rating'] - dataset_df['bot_score']
+
+    # How effective each bingo was — high values mean other plays contributed more than bingo's
+    dataset_df['bingo_efficiency'] = dataset_df['user_score'] / (dataset_df['bingo_count'] + 1)
+
+    # Measures how often the player used challenging letters (Q, Z, X, etc.) — may correlate with skill or desperation
+    dataset_df['hard_letter_rate'] = dataset_df['hard_letter_plays'] / (dataset_df['user_score'] + 1e-5)
+
+    # Measures whether the bot played above or below its expected level
+    dataset_df['bot_performance_ratio'] = dataset_df['bot_score'] / (dataset_df['bot_rating'] + 1e-5)
     #=====================================================================================================
 
     # === Step 3: Add real user rating per game ===
@@ -330,7 +356,7 @@ def create_dataset():
 
     # Map user ratings into features_df
     dataset_df['user_rating'] = (dataset_df.set_index(['game_id', 'nickname']).index.map(users_rating)
-                                  .fillna(0).astype('int64'))  # 0 indicates a row that will be predicated later
+                                 .fillna(0).astype('int64'))  # 0 indicates a row that will be predicated later
     #============================================================================================
 
     # === Step 4: Drop 'game_id' & 'nickname' columns ===
@@ -383,7 +409,7 @@ def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
             ])
             score = cross_val_score(estimator=pipeline, X=X_train_val, y=y_train_val, cv=CV_N_SPLITS,
                                     scoring='neg_root_mean_squared_error', n_jobs=-1).mean()
-            return -score   # negative RMSE
+            return -score  # negative RMSE
 
         study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=42))
         study.optimize(objective, n_trials=N_TRIALS)
