@@ -327,11 +327,17 @@ def create_dataset():
     # Measures how much the user outperformed (or underperformed) the bot — often directly correlated with target rating
     dataset_df['score_diff'] = dataset_df['user_score'] - dataset_df['bot_score']
 
-    # Represents high-risk, high-reward play styles — long words with extra points
-    dataset_df['aggression_score'] = dataset_df['avg_extra_points_per_turn'] * dataset_df['avg_word_length']
+    # Measures how often the player used challenging letters (Q, Z, X, etc.) — may correlate with skill or desperation
+    dataset_df['hard_letter_rate'] = dataset_df['hard_letter_plays'] / (dataset_df['user_score'] + 1e-5)
 
     # Normalizes bingo's by overall score — helpful for measuring how dependent a player is on bingo's
     dataset_df['bingo_density'] = dataset_df['bingo_count'] / (dataset_df['user_score'] + 1e-5)
+
+    # How effective each bingo was — high values mean other plays contributed more than bingo's
+    dataset_df['bingo_efficiency'] = dataset_df['user_score'] / (dataset_df['bingo_count'] + 1)
+
+    # Represents high-risk, high-reward play styles — long words with extra points
+    dataset_df['aggression_score'] = dataset_df['avg_extra_points_per_turn'] * dataset_df['avg_word_length']
 
     # Normalizes score by word complexity; useful to reward concise but effective play
     dataset_df['efficiency_score'] = dataset_df['user_score'] / (dataset_df['avg_word_length'] + 1e-5)
@@ -339,14 +345,36 @@ def create_dataset():
     # Detects when the bot played unusually well or poorly compared to its expected rating
     dataset_df['bot_rating_diff'] = dataset_df['bot_rating'] - dataset_df['bot_score']
 
-    # How effective each bingo was — high values mean other plays contributed more than bingo's
-    dataset_df['bingo_efficiency'] = dataset_df['user_score'] / (dataset_df['bingo_count'] + 1)
-
-    # Measures how often the player used challenging letters (Q, Z, X, etc.) — may correlate with skill or desperation
-    dataset_df['hard_letter_rate'] = dataset_df['hard_letter_plays'] / (dataset_df['user_score'] + 1e-5)
-
     # Measures whether the bot played above or below its expected level
     dataset_df['bot_performance_ratio'] = dataset_df['bot_score'] / (dataset_df['bot_rating'] + 1e-5)
+
+    # Create meaningful feature interactions to capture complex relationships
+    dataset_df['rating_by_efficiency'] = dataset_df['bot_rating'] * dataset_df['efficiency_score']
+    dataset_df['aggression_by_word_length'] = dataset_df['aggression_score'] * dataset_df['avg_word_length']
+    dataset_df['bingo_to_efficiency_ratio'] = dataset_df['bingo_efficiency'] / (dataset_df['efficiency_score'] + 1e-5)
+
+    # Create gameplay style indicators
+    dataset_df['defensive_play'] = dataset_df['exchange_count'] + dataset_df['pass_count']
+    dataset_df['offensive_play'] = dataset_df['aggression_score'] - dataset_df['defensive_play']
+
+    # Create normalized difference features
+    dataset_df['norm_score_diff'] = ((dataset_df['user_score'] - dataset_df['bot_score']) /
+                                     (dataset_df['user_score'] + dataset_df['bot_score'] + 1e-5))
+
+    # Features that capture specific skill elements
+    dataset_df['word_quality_index'] = dataset_df['avg_word_length'] * dataset_df['efficiency_score']
+    dataset_df['strategic_exchanges'] = dataset_df['exchange_count'] / (
+                dataset_df['negative_turns_count'] + 1)  # Strategic vs. forced passes
+
+    # Create features for lexicon adaptability
+    if 'lexicon' in dataset_df.columns:
+        # One-hot encode lexicon
+        lexicon_dummies = pd.get_dummies(dataset_df['lexicon'], prefix='lexicon')
+
+        # Create lexicon-specific performance metrics
+        for lex in lexicon_dummies.columns:
+            lex_name = lex.split('_')[-1]
+            dataset_df[f'efficiency_in_{lex_name}'] = dataset_df['efficiency_score'] * lexicon_dummies[lex]
     #=====================================================================================================
 
     # === Step 3: Add real user rating per game ===
@@ -357,7 +385,7 @@ def create_dataset():
     # Map user ratings into features_df
     dataset_df['user_rating'] = (dataset_df.set_index(['game_id', 'nickname']).index.map(users_rating)
                                  .fillna(0).astype('int64'))  # 0 indicates a row that will be predicated later
-    #============================================================================================
+    #=====================================================================================================
 
     # === Step 4: Drop 'game_id' & 'nickname' columns ===
     dataset_df.drop(columns=['game_id', 'nickname'], inplace=True)
