@@ -388,6 +388,7 @@ def create_dataset():
     #=====================================================================================================
 
     # === Step 4: Drop 'game_id' & 'nickname' columns ===
+    dataset_df.index = dataset_df['game_id']
     dataset_df.drop(columns=['game_id', 'nickname'], inplace=True)
 
     return dataset_df
