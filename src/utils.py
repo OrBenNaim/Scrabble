@@ -1,17 +1,24 @@
+import os
+from typing import Dict, Optional
+import joblib
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import optuna
 from optuna.samplers import TPESampler
-
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.model_selection import cross_val_score, cross_validate
+from sklearn.model_selection import cross_val_score, KFold, train_test_split
+from sklearn.metrics import mean_squared_error
 
-from src.constants import (GAMES_FILE_PATH, TURNS_FILE_PATH, TRAIN_FILE_PATH, TEST_FILE_PATH, BOTS_NICKNAMES,
-                           HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, CV_N_SPLITS, N_TRIALS,
-                           MODEL_CONFIGS)
+from src.constants import (GAMES_FILE_PATH, TURNS_FILE_PATH, TRAIN_FILE_PATH, TEST_FILE_PATH,
+                           BOTS_NICKNAMES, HARD_LETTERS, SCRABBLE_LETTER_VALUES, BOT_LEVEL_MAPPING, CV_N_SPLITS,
+                           N_TRIALS, MODEL_CONFIGS, RANDOM_STATE_VALUE, NUM_BINS, VALIDATION_SIZE)
 
 
 def histograms_of_numerical_features(df, title: str):
@@ -394,7 +401,7 @@ def create_dataset():
     return dataset_df
 
 
-def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
+def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series) -> Dict[str, Pipeline]:
     """
     Tune hyperparameters for Random Forest, XGBoost, and LightGBM using Bayesian Optimization.
 
@@ -407,9 +414,7 @@ def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
 
     Returns:
     --------
-    scores_df : pandas.DataFrame
-        DataFrame with columns: ['model', 'neg_rmse'] for each model.
-    best_models : dict
+    best_pipelines : dict
         Dictionary of model names mapped to their optimized pipelines.
     """
 
@@ -424,8 +429,7 @@ def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
         ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
     ], remainder='passthrough')
 
-    best_models = {}
-    scores = []
+    best_pipelines = {}
 
     for model_name, model_builder in MODEL_CONFIGS.items():
         print(f"\nOptimizing: {model_name}")
@@ -436,101 +440,159 @@ def tune_all_models(X_train_val: pd.DataFrame, y_train_val: pd.Series):
                 ('preprocessor', preprocessor),
                 ('model', current_model)
             ])
-            score = cross_val_score(estimator=pipeline, X=X_train_val, y=y_train_val, cv=CV_N_SPLITS,
-                                    scoring='neg_root_mean_squared_error', n_jobs=-1).mean()
-            return -score  # negative RMSE
 
+            # Split the data into K-1 folds for training and only one fold for validation for each iteration
+            cv = KFold(n_splits=CV_N_SPLITS, shuffle=True, random_state=RANDOM_STATE_VALUE)
+
+            # scores is nd.array consists of a validation result of each fold
+            scores = cross_val_score(estimator=pipeline, X=X_train_val, y=y_train_val, cv=cv,
+                                    scoring='neg_root_mean_squared_error', n_jobs=-1)
+            return -np.mean(scores)  # negative RMSE
+
+        # Create an Optuna study to minimize the RMSE
         study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=42))
+
+        # Run the optimization for the specified number of trials
         study.optimize(objective, n_trials=N_TRIALS)
 
         best_score = study.best_value
         best_params = study.best_trial.params
 
-        print(f"Best score for {model_name}: {best_score:.4f}")
-        print(f"\nBest params: {best_params}")
+        print(f"Best score for {model_name}: {best_score:.4f}\n")
+        print(f"Best params: {best_params}\n")
 
-        # Build final model with best params
+        # For each model, build the final model version with the best hyperparameters
         model = model_builder(study.best_trial)
-        final_pipeline = Pipeline([
+        best_pipeline = Pipeline([
             ('preprocessor', preprocessor),
             ('model', model)
         ])
 
-        best_models[model_name] = final_pipeline
-        scores.append({'model': model_name, 'Mean_CV_RMSE': best_score})
+        best_pipelines[model_name] = best_pipeline
 
-    scores_df = pd.DataFrame(scores).sort_values(by='Mean_CV_RMSE', ascending=True).reset_index(drop=True)
-    return scores_df, best_models
+    #scores_df = pd.DataFrame(scores).sort_values(by='Mean_CV_RMSE', ascending=True).reset_index(drop=True)
+    return best_pipelines
 
 
 def find_best_model(X_train_val: pd.DataFrame, y_train_val: pd.Series) -> (Pipeline, float, float):
     """
-    Tune multiple models, select the one with the best cross-validated performance, and compute train/validation RMSE.
+    Tunes and evaluates multiple regression models, then selects and saves the one
+    with the lowest validation RMSE. Uses pre-saved pipelines if available to avoid re-tuning.
 
     Parameters:
     -----------
     X_train_val : pd.DataFrame
-        Combined training and validation features.
+        The full training + validation feature dataset.
     y_train_val : pd.Series
-        Combined training and validation target values.
+        The full training + validation target variable.
 
     Returns:
     --------
     best_model : sklearn.pipeline.Pipeline
-        The tuned model pipeline with the lowest validation RMSE.
-    avg_train_rmse : float
-        Average RMSE on the training folds during cross-validation.
-    avg_val_rmse : float
-        Average RMSE on the validation folds during cross-validation.
+        The best-performing trained model pipeline.
     """
-    # Tune all models
-    cross_val_scores_df, tuned_models = tune_all_models(X_train_val, y_train_val)
 
-    print(cross_val_scores_df, end='\n')
-    print(tuned_models, end='\n')
+    # Try loading pre-tuned models (if exist), else run tuning
+    tuned_models_dict = load_all_tuned_pipelines_if_valid()
 
-    best_model = tuned_models[cross_val_scores_df.iloc[0]['model']]
+    if tuned_models_dict is None:
+        tuned_models_dict = tune_all_models(X_train_val, y_train_val)
+        save_all_tuned_pipelines(tuned_models_dict=tuned_models_dict)
 
-    avg_train_rmse, avg_val_rmse = calc_train_val_rmse_cv(best_model, X_train_val, y_train_val)
+    # Stratified split to preserve target distribution
+    y_binned = (np.floor(np.interp(y_train_val, (y_train_val.min(), y_train_val.max()), (0, NUM_BINS - 1)))
+                .astype(int))
 
-    return best_model, avg_train_rmse, avg_val_rmse
+    # Split data into training\validation sets with the same distribution of the data
+    X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size=VALIDATION_SIZE,
+                                                      stratify=y_binned, random_state=RANDOM_STATE_VALUE)
+    # Try loading the previously trained best model
+    best_model = load_best_trained_model_if_valid()
+
+    if best_model is None:
+        rmse_scores = {}
+
+        # Train each tuned model and evaluate on a validation set
+        for model_name, tune_model_pipeline in tuned_models_dict.items():
+            model = tune_model_pipeline.named_steps['model']
+            if isinstance(model, (XGBRegressor, LGBMRegressor)):
+                # Set early stopping parameters using set_params
+                tune_model_pipeline.set_params(
+                    model__early_stopping_rounds=10,
+                    model__eval_set=[(X_val, y_val)],
+                    model__verbose=True
+                )
+            # Fit the pipeline
+            tune_model_pipeline.fit(X_train, y_train)
+
+            # Predict and evaluate
+            y_pred = tune_model_pipeline.predict(X_val)
+            rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+            rmse_scores[model_name] = rmse
+            print(f"Validation RMSE of {model_name}: {rmse}")
+
+        # Select the best model
+        best_model_name = min(rmse_scores, key=rmse_scores.get)
+        best_model = tuned_models_dict[best_model_name]
+
+        save_best_trained_model(best_model)
+
+        print(f"\nBest model: {best_model_name} with RMSE: {rmse_scores[best_model_name]}")
+
+    return best_model
 
 
-def calc_train_val_rmse_cv(pipeline: Pipeline, X_train_val: pd.DataFrame, y_train_val: pd.Series) -> (float, float):
+def save_all_tuned_pipelines(tuned_models_dict: Dict[str, Pipeline], path: str="all_model_pipelines.joblib") -> None:
     """
-    Evaluate a model pipeline using cross-validation and return RMSE for training and validation sets.
+    Save all model pipelines (including preprocessing and model) to a single Joblib file.
+
+    tuned_models_dict: Dictionary where keys are model names and values are Pipelines.
+    path: Path to the output Joblib file.
+    """
+    joblib.dump(tuned_models_dict, path)
+
+
+def load_all_tuned_pipelines_if_valid(path: str = "all_model_pipelines.joblib") -> Optional[Dict[str, Pipeline]]:
+    """
+    Load all model pipelines from a file if it exists and is not empty.
 
     Parameters:
     -----------
-    pipeline : sklearn.pipeline.Pipeline
-        The model pipeline to evaluate.
-    X_train_val : pd.DataFrame
-        Combined training and validation features.
-    y_train_val : pd.Series
-        Combined training and validation target values.
+    path: Path to the Joblib file.
 
     Returns:
-    --------
-    avg_train_rmse : float
-        Average RMSE on the training folds.
-    avg_val_rmse : float
-        Average RMSE on the validation folds.
+    -----------
+    Dictionary of model_name -> Pipeline if a file is valid, else None.
     """
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return joblib.load(path)
+    return None
 
-    results = cross_validate(
-        estimator=pipeline,
-        X=X_train_val,
-        y=y_train_val,
-        cv=CV_N_SPLITS,
-        scoring='neg_root_mean_squared_error',
-        return_train_score=True,
-        n_jobs=-1
-    )
 
-    train_scores = results['train_score']  # negative RMSE on training folds
-    val_scores = results['test_score']  # negative RMSE on validation folds
+def save_best_trained_model(best_model: Pipeline, path: str="best_trained_model.joblib") -> None:
+    """
+    Save the trained model (as a Pipeline) to a Joblib file.
 
-    avg_train_rmse = -train_scores.mean()  # Convert to RMSE (positive values)
-    avg_val_rmse = -val_scores.mean()
+    Parameters:
+    -----------
+    best_model: Trained Pipeline object.
+    path: Path to the output Joblib file.
+    """
+    joblib.dump(best_model, path)
 
-    return avg_train_rmse, avg_val_rmse
+
+def load_best_trained_model_if_valid(path: str="best_trained_model.joblib") -> Optional[Pipeline]:
+    """
+    Load the best trained model if the file exists and is not empty.
+
+    Parameters:
+    -----------
+    path: Path to the Joblib file.
+
+    Returns:
+    ----------
+    Pipeline object if a file is valid, else None.
+    """
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return joblib.load(path)
+    return None
