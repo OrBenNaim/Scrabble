@@ -178,3 +178,6 @@ cython_debug/
 /DATA/test.csv
 /DATA/train.csv
 /DATA/turns.csv
+/final_predictions.csv
+/best_trained_model.joblib
+/all_model_pipelines.joblib

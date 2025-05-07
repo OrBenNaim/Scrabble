@@ -515,15 +515,19 @@ def find_best_model(X_train_val: pd.DataFrame, y_train_val: pd.Series) -> (Pipel
         # Train each tuned model and evaluate on a validation set
         for model_name, tune_model_pipeline in tuned_models_dict.items():
             model = tune_model_pipeline.named_steps['model']
+            preprocessor = tune_model_pipeline.named_steps['preprocessor']
+
             if isinstance(model, (XGBRegressor, LGBMRegressor)):
-                # Set early stopping parameters using set_params
-                tune_model_pipeline.set_params(
-                    model__early_stopping_rounds=10,
-                    model__eval_set=[(X_val, y_val)],
-                    model__verbose=True
-                )
-            # Fit the pipeline
-            tune_model_pipeline.fit(X_train, y_train)
+                # Preprocess the training and validation data
+                X_train_transformed = preprocessor.transform(X_train)
+                X_val_transformed = preprocessor.transform(X_val)
+
+                # Fit the model with early stopping
+                model.fit(X_train_transformed, y_train, eval_set=[(X_val_transformed, y_val)],early_stopping_rounds=10,
+                          verbose=True)
+            else:
+                # Fit the entire pipeline for models that don't support early stopping
+                tune_model_pipeline.fit(X_train, y_train)
 
             # Predict and evaluate
             y_pred = tune_model_pipeline.predict(X_val)
