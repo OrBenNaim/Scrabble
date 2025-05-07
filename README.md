@@ -52,3 +52,40 @@ and output a model that can be used to make predictions (and test its metrics).
   - The model’s performance on its train set
   - The model’s performance on its validation set
 - Remember to test your model only on the training data. The test data is for final testing only.
+
+***4 - Feature Engineering***
+- How will you handle the original data? Will you use all of it? What will you remove?
+
+- This is the meaty data science part. Having finished step 2, you should have a good idea as to which
+features are more useful than others. 
+- Now is your time to put that theory to paper and write code that processes the features and feeds them into the model. 
+- The aim is to test many different configurations and features so that the model performs its best. 
+- You should now be running models on the data and analysing the output. 
+- What metrics should you use? Accuracy, Recall, Precision, F1?
+
+- Now is the time to use some pandas magic to load the data and perform operations until you have something you can feed into a model. 
+- Read about feature selection. You may generate many new features, how may we choose the best ones? Which are redundant? 
+And why do we need to choose at all, instead of using them all? Is more really better? Or on the contrary, does “less is more” fit here?
+- How will you handle multiple tables of data?
+- In what format will you store the data?
+
+***5 - False Analysis***
+- Having settled on the optimal model, run it on your validation set and examine where your model made incorrect predictions. 
+- Analyse, comprehensively, why your model produced these results. 
+- Can you replicate them? 
+- Is it easily fixable? 
+- Can you improve your model based on what you learnt?
+
+- For this part you may ask the following questions:
+  1. Is my model’s performance perfect? Why? Why not?	
+  2. Is my model ‘overfitted’? Over what set(s)?
+  3. What inputs tricked my model? How do they reflect in my metric?
+  4. What may I change in my model in order to avoid that?
+  5. What properties in my model should I inspect to understand its weaknesses?
+  6. How could I visualise those properties?
+
+  - And after fixing those patches:
+  1. Did my changes fix the problem?
+  2. Are there other implications to my changes?
+  3. Is the patched model stronger or did we hurt its computational expressibility?
+  4. Had I had more time, what changes to the model would I have made?

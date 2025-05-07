@@ -1,7 +1,7 @@
 import pandas as pd
 
 from src.utils import find_best_model, create_dataset
-
+from src.constants import FINAL_PRED_PATH
 
 if __name__ == "__main__":
     dataset = create_dataset()
@@ -28,4 +28,4 @@ if __name__ == "__main__":
     print(predictions_df)
 
     # Save to CSV file
-    predictions_df.to_csv(r'C:\Users\orben\Desktop\Software Projects\Scrabble\final_predictions.csv', index=False)
+    predictions_df.to_csv(FINAL_PRED_PATH, index=False)
